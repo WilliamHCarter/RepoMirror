@@ -12,9 +12,7 @@ services:
       - FORGEJO__server__DOMAIN=${DOMAIN}
       - FORGEJO__server__ROOT_URL=${FORGEJO_ROOT_URL:-https://${DOMAIN}}
       - FORGEJO__server__HTTP_PORT=3000
-      - FORGEJO__server__START_SSH_SERVER=true
-      - FORGEJO__server__SSH_PORT=2222
-      - FORGEJO__server__SSH_LISTEN_PORT=22
+      - FORGEJO__server__DISABLE_SSH=true
       # Database
       - FORGEJO__database__DB_TYPE=sqlite3
       - FORGEJO__database__PATH=/data/gitea/gitea.db
@@ -23,6 +21,7 @@ services:
       - FORGEJO__mirror__DEFAULT_INTERVAL=8h
       - FORGEJO__mirror__MIN_INTERVAL=10m
       # Security
+      - FORGEJO__security__INSTALL_LOCK=true
       - FORGEJO__service__DISABLE_REGISTRATION=true
       - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false
       # Mailer (disabled by default — enable in .env if needed)
@@ -33,7 +32,6 @@ services:
       - ./data/forgejo:/data
     ports:
       - "127.0.0.1:3000:3000" # HTTP — fronted by Caddy or CF Tunnel
-      - "127.0.0.1:2222:22" # SSH git access
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
       interval: 30s

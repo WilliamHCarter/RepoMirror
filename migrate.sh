@@ -42,9 +42,10 @@ info "Found $total repos on GitHub"
 existing="[]"
 page=1
 while : ; do
-  chunk=$(curl -sf \
+  raw=$(curl -s \
     -H "Authorization: Bearer $FORGEJO_TOKEN" \
-    "$FORGEJO_URL/api/v1/repos/search?limit=50&page=$page" | jq '.data // []')
+    "$FORGEJO_URL/api/v1/repos/search?limit=50&page=$page") || break
+  chunk=$(echo "$raw" | jq '.data // []' 2>/dev/null) || break
   count=$(echo "$chunk" | jq 'length')
   [[ "$count" -eq 0 ]] && break
   existing=$(echo "$existing" | jq --argjson c "$chunk" '. + [$c[] | .name]')
@@ -70,7 +71,7 @@ while IFS= read -r repo; do
   # Escape description for JSON
   desc_escaped=$(echo "$desc" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read().strip()))")
 
-  response=$(curl -sf -X POST \
+  http_code=$(curl -s -o /tmp/repomirror_migrate.json -w "%{http_code}" -X POST \
     -H "Authorization: Bearer $FORGEJO_TOKEN" \
     -H "Content-Type: application/json" \
     "$FORGEJO_URL/api/v1/repos/migrate" \
@@ -88,13 +89,16 @@ while IFS= read -r repo; do
       \"labels\":           true,
       \"issues\":           false,
       \"pull_requests\":    false
-    }" 2>&1) && {
-      success "  done  $name  (private: $private)"
-      success_count=$((success_count + 1))
-    } || {
-      warn "  fail  $name: $response"
-      fail_count=$((fail_count + 1))
-    }
+    }" 2>/dev/null) || true
+
+  if [[ "$http_code" =~ ^2 ]]; then
+    success "  done  $name  (private: $private)"
+    success_count=$((success_count + 1))
+  else
+    response=$(cat /tmp/repomirror_migrate.json 2>/dev/null || echo "HTTP $http_code")
+    warn "  fail  $name: $response"
+    fail_count=$((fail_count + 1))
+  fi
 
   # Small delay to avoid hammering GitHub/Forgejo APIs
   sleep 0.5

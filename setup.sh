@@ -113,7 +113,7 @@ fi
 
 # ── Networking mode ───────────────────────────────────────────────────────────
 section "Networking"
-echo "How will RepoMirror be accessible from the internet?"
+echo "How should your mirror be reached? Pick local if you just want it on this machine."
 echo ""
 echo "  1) Cloudflare Tunnel  [recommended — no port forwarding, works behind CGNAT]"
 echo "  2) Direct / Port forward  [you handle DNS + port 80/443 forwarding]"
@@ -131,7 +131,7 @@ esac
 
 # ── Domain ────────────────────────────────────────────────────────────────────
 if [[ "$NET_MODE" != "local" ]]; then
-  prompt "Your domain for Forgejo (e.g. repos.williamcarter.dev):"
+  prompt "Your domain for Forgejo (where the mirror will be accessible, e.g. repos.yourdomain.com):"
   read -r DOMAIN
   [[ -z "$DOMAIN" ]] && error "Domain cannot be empty"
 else
@@ -204,47 +204,81 @@ fi
 
 # ── GitHub credentials ────────────────────────────────────────────────────────
 section "GitHub"
-prompt "Your GitHub username:"
-read -r GITHUB_USER
-[[ -z "$GITHUB_USER" ]] && error "GitHub username required"
+
+MAX_RETRIES=3
+
+attempts=0
+while true; do
+  prompt "Your GitHub username (the account whose repos will be mirrored):"
+  read -r GITHUB_USER </dev/tty
+  [[ -n "$GITHUB_USER" ]] && break
+  attempts=$((attempts + 1))
+  [[ $attempts -ge $MAX_RETRIES ]] && error "Too many failed attempts."
+  warn "GitHub username cannot be empty. Try again."
+done
 
 echo ""
+echo "  RepoMirror needs a Personal Access Token to read your repos and clone them."
 echo "  Create a fine-grained PAT at: https://github.com/settings/tokens"
 echo "  Required permissions: Contents: Read, Metadata: Read (all repositories)"
 echo ""
-prompt "GitHub Personal Access Token:"
-read -rs GITHUB_TOKEN
-echo ""
-[[ -z "$GITHUB_TOKEN" ]] && error "GitHub token required"
 
-# Validate token
-info "Validating GitHub token..."
-GH_CHECK=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user 2>&1) || \
-  error "GitHub token validation failed. Check the token and try again."
+attempts=0
+while true; do
+  prompt "GitHub Personal Access Token (grants read access to your repos):"
+  read -rs GITHUB_TOKEN </dev/tty
+  echo ""
+  if [[ -z "$GITHUB_TOKEN" ]]; then
+    attempts=$((attempts + 1))
+    [[ $attempts -ge $MAX_RETRIES ]] && error "Too many failed attempts."
+    warn "Token cannot be empty. Try again."
+    continue
+  fi
+
+  info "Validating GitHub token..."
+  GH_CHECK=$(curl -sf -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/user 2>&1) && break
+  attempts=$((attempts + 1))
+  [[ $attempts -ge $MAX_RETRIES ]] && error "GitHub token validation failed after $MAX_RETRIES attempts."
+  warn "GitHub token validation failed. Check the token and try again."
+done
 GH_ACTUAL_USER=$(echo "$GH_CHECK" | jq -r '.login')
 success "Authenticated as GitHub user: $GH_ACTUAL_USER"
 
 # ── Forgejo admin account ─────────────────────────────────────────────────────
 section "Forgejo Admin Account"
+echo "  This is the admin login for your local Forgejo instance."
+echo ""
 prompt "Forgejo admin username [default: admin]:"
-read -r FORGEJO_USER
+read -r FORGEJO_USER </dev/tty
 FORGEJO_USER="${FORGEJO_USER:-admin}"
 
-prompt "Forgejo admin email:"
-read -r FORGEJO_EMAIL
-[[ -z "$FORGEJO_EMAIL" ]] && error "Email required"
+attempts=0
+while true; do
+  prompt "Forgejo admin email (used for account recovery and git commit metadata):"
+  read -r FORGEJO_EMAIL </dev/tty
+  [[ -n "$FORGEJO_EMAIL" ]] && break
+  attempts=$((attempts + 1))
+  [[ $attempts -ge $MAX_RETRIES ]] && error "Too many failed attempts."
+  warn "Email cannot be empty. Try again."
+done
 
-prompt "Forgejo admin password:"
-read -rs FORGEJO_PASSWORD
-echo ""
-[[ ${#FORGEJO_PASSWORD} -lt 8 ]] && error "Password must be at least 8 characters"
+attempts=0
+while true; do
+  prompt "Forgejo admin password (min 8 chars, used to log into the web UI):"
+  read -rs FORGEJO_PASSWORD </dev/tty
+  echo ""
+  [[ ${#FORGEJO_PASSWORD} -ge 8 ]] && break
+  attempts=$((attempts + 1))
+  [[ $attempts -ge $MAX_RETRIES ]] && error "Too many failed attempts."
+  warn "Password must be at least 8 characters. Try again."
+done
 
 # ── Webhook relay secret ──────────────────────────────────────────────────────
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 
 # ── Backup configuration ──────────────────────────────────────────────────────
 section "Backup (optional)"
-echo "Where should RepoMirror back up your Forgejo data?"
+echo "Backups protect your mirror data in case of disk failure or corruption."
 echo ""
 echo "  1) None"
 echo "  2) Local directory on this machine"
@@ -354,7 +388,7 @@ success "Forgejo is up"
 
 # ── Bootstrap Forgejo admin account via CLI ───────────────────────────────────
 info "Creating Forgejo admin account..."
-docker exec forgejo forgejo admin user create \
+docker exec --user git forgejo forgejo admin user create \
   --username "$FORGEJO_USER" \
   --password "$FORGEJO_PASSWORD" \
   --email    "$FORGEJO_EMAIL" \
@@ -363,16 +397,17 @@ docker exec forgejo forgejo admin user create \
 
 # ── Generate Forgejo API token ────────────────────────────────────────────────
 info "Generating Forgejo API token..."
-FORGEJO_TOKEN=$(docker exec forgejo forgejo admin user generate-access-token \
+FORGEJO_TOKEN=$(docker exec --user git forgejo forgejo admin user generate-access-token \
   --username "$FORGEJO_USER" \
   --token-name "repomirror-setup" \
+  --scopes "write:repository,write:user,read:organization,read:misc" \
   --raw 2>/dev/null | tail -1)
 
 if [[ -z "$FORGEJO_TOKEN" ]]; then
   warn "Could not auto-generate Forgejo token. You'll need to create one manually at:"
   warn "  https://$DOMAIN/user/settings/applications"
   prompt "Paste your Forgejo API token here to continue with migration:"
-  read -rs FORGEJO_TOKEN
+  read -rs FORGEJO_TOKEN </dev/tty
   echo ""
 fi
 
@@ -382,8 +417,8 @@ success "Forgejo API token stored"
 
 # ── Run migration ─────────────────────────────────────────────────────────────
 section "Migrating GitHub repos"
-prompt "Migrate all GitHub repos now? [Y/n]:"
-read -r DO_MIGRATE
+prompt "Migrate all GitHub repos now? (clones every repo to your Forgejo instance) [Y/n]:"
+read -r DO_MIGRATE </dev/tty
 if [[ "${DO_MIGRATE:-Y}" =~ ^[Yy]$ ]]; then
   FORGEJO_URL="http://localhost:3000" \
   FORGEJO_TOKEN="$FORGEJO_TOKEN" \
