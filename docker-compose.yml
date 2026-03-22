@@ -1,0 +1,76 @@
+services:
+  # ── Forgejo ─────────────────────────────────────────────────────────────────
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:9
+    container_name: forgejo
+    restart: unless-stopped
+    environment:
+      - USER_UID=1000
+      - USER_GID=1000
+      - TZ=${TZ:-UTC}
+      # Server
+      - FORGEJO__server__DOMAIN=${DOMAIN}
+      - FORGEJO__server__ROOT_URL=${FORGEJO_ROOT_URL:-https://${DOMAIN}}
+      - FORGEJO__server__HTTP_PORT=3000
+      - FORGEJO__server__START_SSH_SERVER=true
+      - FORGEJO__server__SSH_PORT=2222
+      - FORGEJO__server__SSH_LISTEN_PORT=22
+      # Database
+      - FORGEJO__database__DB_TYPE=sqlite3
+      - FORGEJO__database__PATH=/data/gitea/gitea.db
+      # Mirroring
+      - FORGEJO__mirror__ENABLED=true
+      - FORGEJO__mirror__DEFAULT_INTERVAL=8h
+      - FORGEJO__mirror__MIN_INTERVAL=10m
+      # Security
+      - FORGEJO__service__DISABLE_REGISTRATION=true
+      - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false
+      # Mailer (disabled by default — enable in .env if needed)
+      - FORGEJO__mailer__ENABLED=false
+      # Log
+      - FORGEJO__log__LEVEL=Warn
+    volumes:
+      - ./data/forgejo:/data
+    ports:
+      - "127.0.0.1:3000:3000" # HTTP — fronted by Caddy or CF Tunnel
+      - "127.0.0.1:2222:22" # SSH git access
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Webhook Relay ────────────────────────────────────────────────────────────
+  # Bridges GitHub push webhooks → Forgejo mirror-sync API calls.
+  webhook-relay:
+    build: .
+    container_name: repomirror-webhook-relay
+    restart: unless-stopped
+    profiles:
+      - web
+    environment:
+      - GITHUB_WEBHOOK_SECRET=${WEBHOOK_SECRET}
+      - FORGEJO_TOKEN=${FORGEJO_TOKEN}
+      - FORGEJO_URL=http://forgejo:3000
+      - FORGEJO_USER=${FORGEJO_ADMIN_USER}
+    ports:
+      - "127.0.0.1:3001:3001"
+    depends_on:
+      forgejo:
+        condition: service_healthy
+
+  # ── Watchtower ───────────────────────────────────────────────────────────────
+  # Auto-updates the Forgejo image daily and restarts cleanly.
+  watchtower:
+    image: containrrr/watchtower
+    container_name: repomirror-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --interval 86400 --cleanup forgejo
+    environment:
+      - WATCHTOWER_NOTIFICATIONS=shoutrrr
+      # Optional: set WATCHTOWER_NOTIFICATION_URL in .env to get update alerts
+      # e.g. slack://token@channel or smtp://user:pass@host:port/?fromAddress=a&toAddresses=b
+      - WATCHTOWER_NOTIFICATION_URL=${WATCHTOWER_NOTIFICATION_URL:-}

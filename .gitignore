@@ -1,0 +1,18 @@
+# Secrets — never commit these
+.env
+config/cloudflared/
+config/Caddyfile
+config/cloudflared.yml
+
+# Runtime data
+data/
+
+# Backups
+backups/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

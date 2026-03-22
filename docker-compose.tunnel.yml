@@ -1,0 +1,13 @@
+services:
+  # Cloudflare Tunnel — routes public traffic to Forgejo and the webhook relay.
+  # Applied on top of docker-compose.yml when NET_MODE=tunnel.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: repomirror-cloudflared
+    restart: unless-stopped
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./config/cloudflared:/etc/cloudflared:ro
+    depends_on:
+      forgejo:
+        condition: service_healthy
