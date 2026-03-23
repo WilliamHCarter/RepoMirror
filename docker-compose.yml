@@ -13,6 +13,7 @@ services:
       - FORGEJO__server__ROOT_URL=${FORGEJO_ROOT_URL:-https://${DOMAIN}}
       - FORGEJO__server__HTTP_PORT=3000
       - FORGEJO__server__DISABLE_SSH=true
+      - FORGEJO__server__LANDING_PAGE=${LANDING_PAGE:-explore}
       # Database
       - FORGEJO__database__DB_TYPE=sqlite3
       - FORGEJO__database__PATH=/data/gitea/gitea.db
@@ -24,12 +25,18 @@ services:
       - FORGEJO__security__INSTALL_LOCK=true
       - FORGEJO__service__DISABLE_REGISTRATION=true
       - FORGEJO__service__REQUIRE_SIGNIN_VIEW=false
+      - FORGEJO__service__ENABLE_USER_HEATMAP=true
+      # UI
+      - FORGEJO__ui__DEFAULT_THEME=forgejo-dark
+      - FORGEJO__other__SHOW_FOOTER_VERSION=false
       # Mailer (disabled by default — enable in .env if needed)
       - FORGEJO__mailer__ENABLED=false
       # Log
       - FORGEJO__log__LEVEL=Warn
     volumes:
       - ./data/forgejo:/data
+      - ./custom/public:/data/gitea/public
+      - ./custom/templates:/data/gitea/templates
     ports:
       - "127.0.0.1:3000:3000" # HTTP — fronted by Caddy or CF Tunnel
     healthcheck:

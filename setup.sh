@@ -328,6 +328,7 @@ DOMAIN=${DOMAIN}
 NET_MODE=${NET_MODE}
 TUNNEL_ID=${TUNNEL_ID}
 FORGEJO_ROOT_URL=${FORGEJO_ROOT_URL}
+LANDING_PAGE=/${FORGEJO_USER}
 
 # ── GitHub ────────────────────────────────────────────────────────────────────
 GITHUB_USER=${GITHUB_USER}
@@ -360,6 +361,25 @@ if [[ "$NET_MODE" == "direct" ]]; then
     "$SCRIPT_DIR/Caddyfile.template" > "$SCRIPT_DIR/config/Caddyfile"
   success "Caddyfile generated"
 fi
+
+# ── Create custom branding directory ───────────────────────────────────────────
+info "Creating custom branding directory..."
+mkdir -p "$SCRIPT_DIR/custom/public/assets/img"
+mkdir -p "$SCRIPT_DIR/custom/public/assets/css"
+mkdir -p "$SCRIPT_DIR/custom/templates/custom"
+
+# Placeholder header/footer for custom CSS/JS injection
+[[ ! -f "$SCRIPT_DIR/custom/templates/custom/header.tmpl" ]] && \
+  echo "<!-- Add custom CSS here: <style>...</style> or <link> tags -->" \
+    > "$SCRIPT_DIR/custom/templates/custom/header.tmpl"
+
+[[ ! -f "$SCRIPT_DIR/custom/templates/custom/footer.tmpl" ]] && \
+  echo "<!-- Add custom JS here: <script>...</script> tags -->" \
+    > "$SCRIPT_DIR/custom/templates/custom/footer.tmpl"
+
+success "Custom branding directory ready at: custom/"
+info "  Drop logo.svg, favicon.svg into custom/public/assets/img/"
+info "  Add CSS themes as custom/public/assets/css/theme-*.css"
 
 # ── Bring up the stack ────────────────────────────────────────────────────────
 section "Starting RepoMirror stack"
@@ -429,6 +449,39 @@ if [[ "${DO_MIGRATE:-Y}" =~ ^[Yy]$ ]]; then
 else
   info "Skipping migration. Run it later with: ./repomirror.sh migrate"
 fi
+
+# ── Create .profile repo (profile README) ─────────────────────────────────────
+info "Creating .profile repo for your profile page..."
+PROFILE_README="# Hi, I'm ${FORGEJO_USER}
+
+Welcome to my self-hosted code mirror.
+
+Browse my repositories below, or check out my [GitHub](https://github.com/${GITHUB_USER}).
+"
+PROFILE_README_B64=$(echo "$PROFILE_README" | base64)
+
+curl -s -X POST \
+  -H "Authorization: Bearer $FORGEJO_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://localhost:3000/api/v1/user/repos" \
+  -d "{
+    \"name\":          \".profile\",
+    \"description\":   \"Profile README\",
+    \"private\":       false,
+    \"auto_init\":     false
+  }" >/dev/null 2>&1 || true
+
+# Add README via API (creates initial commit)
+curl -s -X POST \
+  -H "Authorization: Bearer $FORGEJO_TOKEN" \
+  -H "Content-Type: application/json" \
+  "http://localhost:3000/api/v1/repos/$FORGEJO_USER/.profile/contents/README.md" \
+  -d "{
+    \"message\": \"Initial profile README\",
+    \"content\": \"$PROFILE_README_B64\"
+  }" >/dev/null 2>&1 && \
+  success "Profile README created — edit it at .profile/README.md" || \
+  warn "Could not create .profile repo — you can create it manually later"
 
 # ── Set up backup cron ────────────────────────────────────────────────────────
 if [[ "${BACKUP_MODE:-1}" != "1" ]]; then

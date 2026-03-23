@@ -6,6 +6,7 @@ config/cloudflared.yml
 
 # Runtime data
 data/
+custom/
 
 # Backups
 backups/
